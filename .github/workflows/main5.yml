@@ -1,0 +1,62 @@
+name: Kryptex CPU Miner Automation
+
+on:
+  # Dispara manualmente ou em intervalos (aqui configurado para rodar ao abrir/pull request como exemplo)
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  mine-cpu:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Pull Kryptex Miner Image
+        run: |
+          # Tenta usar a imagem oficial do Kryptex. 
+          # Se não estiver disponível publicamente, usamos uma imagem genérica de mineração ou simulador.
+          # Para este exemplo, assumimos que 'kryptex/miner' existe ou usamos um substituto leve.
+          docker pull kryptex/miner:latest || docker pull ghcr.io/kryptex/miner:latest
+
+      - name: Run Miner with Docker Compose
+        run: |
+          # Cria o docker-compose.yml dinamicamente com as credenciais fornecidas
+          cat > docker-compose.yml <<EOF
+          version: '3.8'
+          services:
+            miner:
+              image: kryptex/miner:latest
+              container_name: btc-kryptex-cpu
+              restart: always
+              environment:
+                - POOL_URL=btc.kryptex.network:7014
+                - WORKER=krxYMRZKJD.worker
+                - CPU_ONLY=true
+              network_mode: host
+          EOF
+
+          # Inicia o minerador em segundo plano
+          docker compose up -d
+
+      - name: Monitor Miner Logs
+        run: |
+          # Aguarda alguns segundos para o minerador iniciar
+          sleep 10
+          
+          # Exibe os logs para verificar a conexão e mineração
+          docker logs btc-kryptex-cpu --tail 50
+
+      - name: Keep Alive (Simula 24h com loop)
+        run: |
+          # Como o GitHub Runner pode terminar, este loop mantém o container vivo enquanto o job estiver ativo.
+          # Para mineração real 24/7 no GitHub, você precisaria de um serviço pago ou runner privado.
+          while true; do
+            docker stats btc-kryptex-cpu --no-stream
+            sleep 60
+          done
