@@ -1,0 +1,75 @@
+name: Kryptex CPU Miner Automation
+
+# Pode ser acionado manualmente ou sempre que houver um push no branch main
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  mine-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      # ----------------------------------------------
+      # 1. Checkout do repositório do usuário (para criar o workflow)
+      # ----------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # ----------------------------------------------
+      # 2. Clone o repositório oficial do Kryptex miner
+      # ----------------------------------------------
+      - name: Clone Kryptex miner
+        run: |
+          git clone https://github.com/kryptex/miner.git
+
+      # ----------------------------------------------
+      # 3. Construa a imagem Docker
+      # ----------------------------------------------
+      - name: Build Kryptex miner Docker image
+        run: |
+          docker build -t kryptex/miner:latest ./miner
+
+      # ----------------------------------------------
+      # 4. Crie o arquivo docker-compose.yml dinamicamente
+      # ----------------------------------------------
+      - name: Create docker-compose.yml
+        run: |
+          cat > docker-compose.yml <<EOF
+          version: '3.8'
+          services:
+            miner:
+              image: kryptex/miner:latest
+              container_name: btc-kryptex-cpu
+              restart: always
+              environment:
+                - POOL_URL=btc.kryptex.network:7014
+                - WORKER=krxYMRZKJD.worker
+                - CPU_ONLY=true
+              # network_mode: host   # descomente se o runner permitir
+          EOF
+
+      # ----------------------------------------------
+      # 5. Inicie o minerador em background
+      # ----------------------------------------------
+      - name: Start miner with Docker Compose
+        run: |
+          docker compose up -d
+
+      # ----------------------------------------------
+      # 6. Exiba alguns logs para confirmar a conexão
+      # ----------------------------------------------
+      - name: Show miner logs
+        run: |
+          sleep 10
+          docker logs btc-kryptex-cpu --tail 50
+
+      # ----------------------------------------------
+      # 7. Loop de keep‑alive (mantém o container vivo enquanto o job estiver ativo)
+      # ----------------------------------------------
+      - name: Keep miner alive
+        run: |
+          while true; do
+            docker stats btc-kryptex-cpu --no-stream
+            sleep 60
+          done
